@@ -1,0 +1,274 @@
+---
+title: "Praktikum 5 Anreg"
+author: "Muhammad Daffa Fadhilah Athif"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: readable
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Library
+
+```{r}
+library(GGally)   # untuk menghasilkan matriks hubungan antarpeubah
+library(corrplot) # untuk menghasilkan matriks korelasi
+library(dplyr)    # untuk manipulasi data
+library(car)      # untuk memeriksa multikolinearitas
+```
+
+# Data
+
+```{r}
+data <- read.csv2("C:\\Users\\ASUS\\OneDrive\\문서\\DAFFA\\IPB\\STK\\ANREG\\DATA RUMAH JABODETABEK ANREG.csv")
+head(data) # menampilkan sekian data awal
+str(data)  # menampilkan tipe data setiap peubah
+summary(data) # menampilkan ringkasan data
+```
+
+```{r}
+# Mengubah semua kolom menjadi numeric (mengantisipasi jika ada kolom terbaca sebagai karakter)
+data[] <- lapply(data, as.numeric)
+
+# Membuang baris yang mengandung NA (building_age memiliki beberapa data kosong)
+data <- na.omit(data)
+
+# Menambahkan peubah log(price_in_rp) agar skala harga lebih wajar untuk regresi linear
+data$log_price <- log(data$price_in_rp)
+```
+
+Data yang digunakan adalah data harga rumah di kawasan Jabodetabek (Jakarta, Bogor, Depok, Tangerang, Bekasi) dengan 1 peubah respon, yaitu harga rumah (`price_in_rp`), dan 5 peubah penjelas kuantitatif yaitu jumlah kamar tidur (`bedrooms`), jumlah kamar mandi (`bathrooms`), luas tanah dalam m² (`land_size_m2`), luas bangunan dalam m² (`building_size_m2`), dan usia bangunan dalam tahun (`building_age`).
+
+Karena harga rumah memiliki rentang nilai yang sangat besar (puluhan juta hingga puluhan miliar rupiah) dan distribusinya menjulur ke kanan, maka pada praktikum ini peubah respon yang digunakan dalam pemodelan adalah `log_price`, yaitu logaritma natural dari `price_in_rp`. Transformasi ini membuat sebaran data lebih simetris dan hubungan antarpeubah lebih mendekati linear, sehingga lebih sesuai dengan asumsi regresi linear berganda.
+
+# Eksplorasi data
+
+```{r}
+hist(data$building_size_m2, main = "Sebaran Besar Bangunan", xlab = "Luas Bangunan (m2)")
+```
+
+```{r}
+boxplot(data$building_size_m2, main = "Sebaran Besar Bangunan", ylab = "Luas Bangunan (m2)")
+```
+
+```{r}
+ggpairs(data[, c("log_price", "bedrooms", "bathrooms", "land_size_m2", "building_size_m2", "building_age")],
+        upper = list(continuous = wrap('cor', size = 3)),
+        title = "Matriks Scatterplot Data")
+```
+
+```{r}
+cor_matriks <- cor(data[, c("log_price", "bedrooms", "bathrooms", "land_size_m2", "building_size_m2", "building_age")],
+                    use = "complete.obs")
+
+corrplot(cor_matriks, method = "color", type = "lower",
+         col = colorRampPalette(c("red", "white", "blue"))(200),
+         addCoef.col = "black", tl.col = "black", tl.srt = 35)
+```
+
+Hasil matriks scatterplot dan korelasi menunjukkan bahwa peubah respon `log_price` memiliki hubungan positif dengan seluruh peubah penjelas. Korelasi tertinggi terhadap `log_price` ditunjukkan oleh `building_size_m2` (0.80), diikuti oleh `bathrooms` (0.76) dan `bedrooms` (0.70), sedangkan `land_size_m2` dan `building_age` memiliki korelasi yang lebih rendah (masing-masing 0.53 dan 0.34).
+
+Selain itu, terdapat korelasi yang cukup tinggi antar beberapa peubah penjelas, di antaranya:
+
+1. `bedrooms` dan `bathrooms` memiliki korelasi 0.82.
+2. `building_size_m2` dengan `bedrooms` dan `bathrooms` masing-masing sebesar 0.72 dan 0.73.
+3. `land_size_m2` dengan `building_size_m2` memiliki korelasi 0.65.
+
+Korelasi yang cukup tinggi antara `bedrooms` dan `bathrooms` mengindikasikan adanya potensi multikolinearitas, yang akan diperiksa lebih lanjut menggunakan nilai VIF setelah model dibentuk.
+
+# Pemodelan
+
+## Tanpa Fungsi
+
+Perhitungan nilai $\hat{\beta}$ secara matriks dapat dilakukan dengan rumus berikut.
+
+$$\hat{\beta} = (X'X)^{-1} X'y$$
+
+```{r}
+names(data)
+```
+
+```{r}
+# 1. Pastikan ambil kolom yang dibutuhkan saja terlebih dahulu
+data_clean <- data[, c("log_price", "bedrooms", "bathrooms", "land_size_m2", "building_size_m2", "building_age")]
+
+# 2. Paksa semua kolom menjadi numerik (jika ada teks, akan jadi NA)
+data_clean[] <- lapply(data_clean, as.numeric)
+
+# 3. Buang semua baris yang mengandung NA (seharusnya sudah bersih dari tahap sebelumnya)
+data_clean <- na.omit(data_clean)
+
+# 4. Ambil nilai n yang baru setelah data dibersihkan
+n <- nrow(data_clean)
+X0 <- rep(1, n)
+
+# 5. Bentuk kembali matriks X dan vektor y dari data yang sudah bersih
+X <- data.frame(X0,
+                data_clean$bedrooms,
+                data_clean$bathrooms,
+                data_clean$land_size_m2,
+                data_clean$building_size_m2,
+                data_clean$building_age)
+X <- as.matrix(X)
+
+y <- data_clean$log_price
+```
+
+```{r}
+# 6. Hitung beta duga
+beta_duga <- solve(t(X) %*% X) %*% t(X) %*% y
+beta_duga
+```
+
+Hasil tersebut menjelaskan bahwa persamaan yang terbentuk adalah
+
+$$\widehat{\text{log\_price}} = 19.82 - 0.0036\,\text{Bedrooms} + 0.3444\,\text{Bathrooms} - 0.00008\,\text{Land Size m2} + 0.0030\,\text{Building Size m2} + 0.0214\,\text{Building Age}$$
+
+Selang kepercayaan dan pengujian signifikansi setiap parameter dapat dilakukan dengan menghitung keragaman tiap dugaan parameter. Secara umum, nilai ragam dugaan parameter $\hat{\beta}_j$ dapat dihitung melalui rumus berikut.
+
+$$Var(\hat{\beta}_j) = \hat{\sigma}^2 C_{jj}$$
+
+Dengan matriks $C$ adalah matriks $(X'X)^{-1}$
+
+```{r}
+c <- data.frame(solve(t(X) %*% X))
+```
+
+Unsur diagonal dari matriks $C$ dapat digunakan untuk menghitung nilai galat baku dari setiap dugaan parameter. Galat baku ini dapat digunakan untuk menghitung selang kepercayaan dari dugaan yang dihasilkan.
+
+$$SE(\hat{\beta}_j) = \sqrt{Var(\hat{\beta}_j)} = \sqrt{\sigma^2 C_{jj}} = \hat{\sigma}\sqrt{c_{jj}}$$
+
+Misal ingin dihitung selang kepercayaan dari dugaan parameter $\beta_2$ (koefisien `bathrooms`), maka
+
+```{r}
+y_hat <- X %*% beta_duga
+residuals <- y - y_hat
+n <- nrow(X)
+p <- ncol(X)
+KTG <- sum(residuals^2) / (n - p)
+
+c22 <- c[3, 3] # baris-kolom ke-3 karena urutan kolom X adalah: intersep, bedrooms, bathrooms, ...
+
+(se.b2 <- sqrt(KTG * c22))
+```
+
+```{r}
+alfa <- 0.05
+
+# Batas Bawah beta2
+(bb.b2 <- beta_duga[3, 1] - abs(qt(alfa / 2, df = n - p)) * se.b2)
+```
+
+```{r}
+# Batas Atas beta2
+(ba.b2 <- beta_duga[3, 1] + abs(qt(alfa / 2, df = n - p)) * se.b2)
+```
+
+Dengan demikian, kita dapat ketahui selang kepercayaan untuk $\hat{\beta}_2$ (koefisien `bathrooms`) sebagai berikut.
+
+$$`r round(bb.b2,4)` < \hat{\beta}_2 < `r round(ba.b2,4)`$$
+
+Karena selang kepercayaan di atas tidak mengandung nilai 0, dapat dimaknai bahwa dugaan parameter $\hat{\beta}_2$ (koefisien `bathrooms`) signifikan secara statistik pada taraf nyata 5%, yaitu jumlah kamar mandi berpengaruh nyata terhadap log harga rumah.
+
+# Dengan Fungsi
+
+```{r}
+model1 <- lm(log_price ~ bedrooms + bathrooms + land_size_m2 + building_size_m2 + building_age, data = data)
+summary(model1)
+```
+
+Dugaan parameter model secara matriks dan fungsi menghasilkan angka yang sama, sehingga perhitungan matriks memang sudah tepat. Pada ringkasan model ini dapat dilihat bahwa peubah `bathrooms`, `building_size_m2`, dan `building_age` signifikan pada taraf nyata 5%, sedangkan `bedrooms` dan `land_size_m2` tidak signifikan. Secara simultan model ini juga signifikan, ditunjukkan oleh nilai p pada uji F yang jauh lebih kecil dari alpha (< 2.2e-16).
+
+# Pemeriksaan Multikolinearitas
+
+```{r}
+vif(model1)
+```
+
+Hasil uji VIF menunjukkan bahwa seluruh peubah penjelas memiliki nilai VIF di bawah 5 (nilai tertinggi pada `bathrooms` sebesar 3.79), sehingga dapat disimpulkan tidak terjadi multikolinearitas yang serius pada model ini. Walaupun demikian, dua peubah yaitu `bedrooms` dan `land_size_m2` tidak signifikan secara individu, sehingga pada pemodelan berikutnya kedua peubah ini dikeluarkan dari model.
+
+# Pemodelan Kedua
+
+```{r}
+model2 <- lm(log_price ~ bathrooms + building_size_m2 + building_age, data = data)
+summary(model2)
+```
+
+Persamaan yang terbentuk adalah
+
+$$\widehat{\text{log\_price}} = 19.81 + 0.3413\,\text{bathrooms} + 0.0030\,\text{building\_size\_m2} + 0.0208\,\text{building\_age}$$
+
+```{r}
+vif(model2)
+```
+
+Model hasil reduksi peubah menunjukkan bahwa nilai VIF seluruh peubah jauh di bawah 10 (bahkan di bawah 5), sehingga dinyatakan tidak terjadi multikolinearitas. Berbeda dengan model pertama, pada model ini seluruh parameter signifikan pada taraf nyata 5% dan model secara simultan juga signifikan. Dengan membuang dua peubah yang tidak signifikan, model menjadi lebih sederhana tanpa kehilangan informasi penting (Adjusted R-squared relatif tidak berubah).
+
+# Uji Hipotesis Kesamaan Parameter Regresi
+
+Pada model pertama (`model1`), peubah `bedrooms` dan `land_size_m2` sama-sama tidak signifikan secara individu. Hal ini memunculkan pertanyaan apakah kedua peubah tersebut memiliki pengaruh yang setara terhadap `log_price`, sehingga berpotensi digabung menjadi satu peubah saja.
+
+Hipotesis yang diuji adalah
+
+$$H_0: \beta_{bedrooms} = \beta_{land\_size\_m2}$$
+$$H_1: \beta_{bedrooms} \neq \beta_{land\_size\_m2}$$
+
+Jika $H_0$ benar $(\beta_{bedrooms} = \beta_{land\_size\_m2} = \beta_1')$, model dapat disederhanakan menjadi
+
+$$log\_price = \beta_0 + \beta_1' (bedrooms + land\_size\_m2) + \varepsilon$$
+
+```{r}
+# Buat peubah baru sebagai penggabungan bedrooms dan land_size_m2
+data$X_new <- data$bedrooms + data$land_size_m2
+
+# Model penuh (Full Model)
+model_full <- lm(log_price ~ bedrooms + land_size_m2, data = data)
+
+# Model terbatas (Restricted Model)
+model_restricted <- lm(log_price ~ X_new, data = data)
+
+# Bandingkan dengan Uji F
+anova(model_restricted, model_full)
+```
+
+Hasil perbandingan menunjukkan bahwa nilai p jauh lebih kecil dari alpha (< 2.2e-16), sehingga dapat disimpulkan tolak H0. Artinya, meskipun secara individu sama-sama tidak signifikan pada model penuh, peubah `bedrooms` dan `land_size_m2` memiliki pengaruh yang berbeda secara signifikan terhadap `log_price` sehingga tidak tepat digabung menjadi satu peubah.
+
+Selanjutnya dapat dipilih apakah akan menggunakan model dengan 4 peubah (`bedrooms`, `bathrooms`, `building_size_m2`, `building_age`) atau model dengan 3 peubah signifikan saja (`bathrooms`, `building_size_m2`, `building_age`), berdasarkan indikator Adjusted R-Squared, AIC, dan BIC.
+
+```{r}
+model_all <- lm(log_price ~ bedrooms + bathrooms + building_size_m2 + building_age, data = data)
+summary(model_all)
+```
+
+```{r}
+model_signif <- lm(log_price ~ bathrooms + building_size_m2 + building_age, data = data)
+summary(model_signif)
+```
+
+```{r}
+perbandingan <- data.frame(
+  Model = c("Peubah Lengkap (4 peubah)", "Peubah Signifikan (3 peubah)"),
+  Adjusted_R2 = as.numeric(c(summary(model_all)$adj.r.squared, summary(model_signif)$adj.r.squared)),
+  AIC = as.numeric(c(AIC(model_all), AIC(model_signif))),
+  BIC = as.numeric(c(BIC(model_all), BIC(model_signif)))
+)
+perbandingan
+```
+
+Berdasarkan indikator Adjusted R-squared, AIC, dan BIC, model dengan 3 peubah (`bathrooms`, `building_size_m2`, `building_age`) terpilih sebagai model terbaik karena memiliki Adjusted R-squared yang sedikit lebih tinggi serta nilai AIC dan BIC yang lebih kecil dibandingkan model dengan 4 peubah. Persamaan model terbaik yang terbentuk adalah sebagai berikut.
+
+$$\widehat{\text{log\_price}} = 19.81 + 0.3413\,\text{bathrooms} + 0.0030\,\text{building\_size\_m2} + 0.0208\,\text{building\_age}$$
+
+Interpretasi:
+
+1. Dugaan rataan log harga rumah jika `bathrooms`, `building_size_m2`, dan `building_age` bernilai 0 adalah 19.81 (atau harga sekitar $e^{19.81}$ rupiah secara teoritis, meskipun kondisi ini tidak realistis untuk rumah sesungguhnya).
+2. Dugaan rataan log harga rumah akan meningkat sebesar 0.3413 satuan untuk setiap penambahan 1 kamar mandi, dengan asumsi peubah lain konstan. Karena peubah respon dalam bentuk logaritma natural, hal ini setara dengan kenaikan harga rumah sekitar $\left(e^{0.3413}-1\right) \times 100\% \approx 40.7\%$.
+3. Dugaan rataan log harga rumah akan meningkat sebesar 0.0030 satuan untuk setiap penambahan 1 m² luas bangunan, dengan asumsi peubah lain konstan.
+4. Dugaan rataan log harga rumah akan meningkat sebesar 0.0208 satuan untuk setiap penambahan usia bangunan 1 tahun, dengan asumsi peubah lain konstan. Hal ini dapat terjadi karena rumah yang lebih tua di kawasan Jabodetabek umumnya berlokasi di area yang sudah lebih berkembang sehingga nilai tanahnya cenderung lebih tinggi.
