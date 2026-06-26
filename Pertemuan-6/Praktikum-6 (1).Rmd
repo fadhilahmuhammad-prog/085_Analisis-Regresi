@@ -1,0 +1,480 @@
+---
+title: "Praktikum 6 Anreg"
+author: "Muhammad Daffa Fadhilah Athif"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: readable
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Library
+
+```{r, warning = FALSE, message = FALSE}
+library(GGally)    # untuk menghasilkan matriks hubungan antarpeubah
+library(corrplot)  # untuk menghasilkan matriks korelasi
+library(dplyr)     # untuk manipulasi data
+library(car)        # untuk memeriksa multikolinearitas
+library(stargazer) # untuk menampilkan hasil perbandingan regresi
+library(lmtest)    # untuk uji kehomogenan ragam sisaan dan saling bebas
+library(olsrr)     # untuk pemeriksaan amatan tidak biasa
+```
+
+# Data
+
+```{r}
+dt <- read.csv2("C:\\Users\\ASUS\\OneDrive\\문서\\DAFFA\\IPB\\STK\\ANREG\\DATA RUMAH JABODETABEK ANREG.csv")
+head(dt) # menampilkan sekian data awal
+```
+
+```{r}
+str(dt) # menampilkan tipe data setiap peubah
+```
+
+```{r}
+summary(dt) # menampilkan ringkasan data
+```
+
+Data yang digunakan adalah data harga rumah di kawasan Jabodetabek (Jakarta, Bogor, Depok, Tangerang, Bekasi) dengan 1 peubah respon yaitu harga rumah (`price_in_rp`) dan 5 peubah penjelas, yaitu jumlah kamar tidur (`bedrooms`), jumlah kamar mandi (`bathrooms`), luas tanah dalam m² (`land_size_m2`), luas bangunan dalam m² (`building_size_m2`), dan usia bangunan dalam tahun (`building_age`).
+
+Karena harga rumah memiliki rentang nilai yang sangat besar dan menjulur ke kanan, maka peubah respon yang digunakan dalam pemodelan adalah `log_price`, yaitu logaritma natural dari `price_in_rp`. Selain itu, peubah `building_age` memiliki beberapa data kosong (NA) sehingga baris dengan data kosong tersebut dibuang sebelum pemodelan.
+
+```{r}
+dt[] <- lapply(dt, as.numeric)
+dt <- na.omit(dt)
+dt$log_price <- log(dt$price_in_rp)
+
+# Hanya menggunakan peubah yang relevan untuk pemodelan
+dt <- dt %>% select(log_price, bedrooms, bathrooms, land_size_m2, building_size_m2, building_age)
+rownames(dt) <- 1:nrow(dt)
+dim(dt)
+```
+
+Setelah pembersihan data, tersisa `r nrow(dt)` amatan yang akan digunakan pada keseluruhan pemodelan di praktikum ini.
+
+# Eksplorasi Data
+
+## Peubah Respon
+
+```{r}
+hist(dt$log_price, main = "Sebaran Log Harga Rumah", xlab = "log(price_in_rp)")
+```
+
+```{r}
+boxplot(dt$log_price, main = "Sebaran Log Harga Rumah", ylab = "log(price_in_rp)")
+```
+
+## Peubah Penjelas vs Peubah Respon
+
+### Bedrooms
+
+```{r}
+plot(dt$bedrooms, dt$log_price, xlab = "Jumlah Kamar Tidur", ylab = "log(price_in_rp)")
+```
+
+Hubungan antara `bedrooms` dan `log_price` cenderung positif namun dengan sebaran yang cukup lebar pada setiap nilai `bedrooms`, mengindikasikan peubah ini saja belum cukup menjelaskan variasi harga rumah.
+
+### Bathrooms
+
+```{r}
+plot(dt$bathrooms, dt$log_price, xlab = "Jumlah Kamar Mandi", ylab = "log(price_in_rp)")
+```
+
+Hubungan linearitas tampak cukup jelas antara `bathrooms` dan `log_price`, dengan kecenderungan harga rumah meningkat seiring bertambahnya jumlah kamar mandi.
+
+### Land Size
+
+```{r}
+plot(dt$land_size_m2, dt$log_price, xlab = "Luas Tanah (m2)", ylab = "log(price_in_rp)")
+```
+
+Terdapat beberapa amatan dengan luas tanah yang jauh lebih besar dibandingkan amatan lainnya, sehingga sebaran cenderung padat di sisi kiri dan jarang di sisi kanan.
+
+### Building Size
+
+```{r}
+plot(dt$building_size_m2, dt$log_price, xlab = "Luas Bangunan (m2)", ylab = "log(price_in_rp)")
+```
+
+Hubungan linearitas tampak paling jelas antara `building_size_m2` dan `log_price` dibandingkan peubah lainnya, sejalan dengan nilai korelasinya yang tertinggi terhadap peubah respon.
+
+### Building Age
+
+```{r}
+plot(dt$building_age, dt$log_price, xlab = "Usia Bangunan (tahun)", ylab = "log(price_in_rp)")
+```
+
+Hubungan antara `building_age` dan `log_price` cenderung lemah dan sebarannya lebih acak dibandingkan peubah lainnya.
+
+## Korelasi
+
+```{r}
+ggpairs(dt,
+        upper = list(continuous = wrap('cor', size = 3)),
+        title = "Matriks Scatterplot Data")
+```
+
+```{r}
+cor_matrix <- cor(dt, use = "complete.obs")
+
+corrplot(cor_matrix, method = "color", type = "lower",
+         col = colorRampPalette(c("red", "white", "blue"))(200),
+         addCoef.col = "black", tl.col = "black", tl.srt = 35)
+```
+
+Hasil matriks scatterplot dan korelasi menunjukkan bahwa peubah respon `log_price` memiliki hubungan positif dengan seluruh peubah penjelas. Korelasi tertinggi ditunjukkan oleh `building_size_m2` (0.80), diikuti `bathrooms` (0.76) dan `bedrooms` (0.70), sedangkan `land_size_m2` dan `building_age` memiliki korelasi yang lebih rendah (masing-masing sekitar 0.53 dan 0.34).
+
+Selain itu, terdapat korelasi yang cukup tinggi antar beberapa peubah penjelas, di antaranya:\
+1. `bedrooms` dan `bathrooms` memiliki korelasi 0.82.\
+2. `building_size_m2` dengan `bedrooms` dan `bathrooms` masing-masing sebesar 0.72 dan 0.73.\
+3. `land_size_m2` dengan `building_size_m2` memiliki korelasi 0.65.\
+
+Korelasi yang cukup tinggi antara `bedrooms` dan `bathrooms` mengindikasikan adanya potensi multikolinearitas, yang akan diperiksa lebih lanjut pada bagian berikutnya.
+
+# Pemodelan
+
+```{r}
+model1 <- lm(formula = log_price ~ ., data = dt)
+summary(model1)
+```
+
+Persamaan yang terbentuk adalah
+
+$$\widehat{\text{log\_price}} = 19.82 - 0.0036\,\text{bedrooms} + 0.3444\,\text{bathrooms} - 0.00008\,\text{land\_size\_m2} + 0.0030\,\text{building\_size\_m2} + 0.0214\,\text{building\_age}$$
+
+Pada ringkasan model ini dapat dilihat bahwa secara simultan model signifikan (nilai p pada uji F jauh lebih kecil dari alpha 5%). Secara parsial, peubah `bathrooms`, `building_size_m2`, dan `building_age` signifikan pada taraf nyata 5%, sedangkan `bedrooms` dan `land_size_m2` tidak signifikan. Tidak ditemukan perubahan tanda koefisien yang berlawanan dengan arah korelasi pada model ini, namun keberadaan dua peubah yang tidak signifikan tetap perlu ditelusuri lebih lanjut, dimulai dengan pemeriksaan multikolinearitas dilanjutkan dengan diagnosis sisaan.
+
+# Pemeriksaan Multikolinearitas
+
+## Perubahan Peubah
+
+```{r}
+mod1 <- lm(log_price ~ ., dt[, 1:2])
+mod2 <- lm(log_price ~ ., dt[, 1:3])
+mod3 <- lm(log_price ~ ., dt[, 1:4])
+mod4 <- lm(log_price ~ ., dt[, 1:5])
+mod5 <- lm(log_price ~ ., dt)
+
+stargazer(mod1, mod2, mod3, mod4, mod5,
+          type = "text", single.row = TRUE)
+```
+
+Penambahan peubah satu demi satu menunjukkan bahwa koefisien `bedrooms` berubah cukup besar, bahkan berubah tanda dari positif (saat sendirian di `mod1`) menjadi negatif setelah peubah lain ditambahkan. Hal ini mengindikasikan adanya hubungan yang tumpang tindih antara `bedrooms` dengan peubah penjelas lainnya, khususnya `bathrooms`, sehingga perlu dicermati lebih lanjut melalui nilai VIF.
+
+## Perubahan Banyak Data
+
+```{r}
+set.seed(123)
+dt_sampel <- dt[sample(1:nrow(dt), 200), ]
+mod5_sampel <- lm(log_price ~ ., dt_sampel)
+stargazer(summary(mod5)$coefficients, summary(mod5_sampel)$coefficients,
+          type = "text",
+          font.size = "small")
+```
+
+Dugaan parameter relatif stabil meskipun jumlah amatan yang digunakan berbeda jauh (seluruh data dibandingkan dengan 200 amatan acak), yang berarti model cukup stabil terhadap perubahan banyaknya data.
+
+## Akar Ciri
+
+```{r}
+x <- dt[-1]
+r <- cor(x)
+(ev <- eigen(r)$values)
+```
+
+```{r}
+# Simultan
+if ((max(ev) / min(ev)) <= 100) {
+  cat("Tidak ada multikolinearitas\n")
+} else if ((max(ev) / min(ev)) > 100 & (max(ev) / min(ev)) <= 1000) {
+  cat("Ada multikolinearitas yang lemah\n")
+} else {
+  cat("Ada multikolinearitas yang kuat\n")
+}
+```
+
+```{r}
+# Parsial
+if (all((max(ev) / ev) <= 1000)) {
+  cat("Tidak ada multikolinearitas\n")
+} else {
+  cat("Ada multikolinearitas pada peubah penjelas ke:", which((max(ev) / ev) > 1000), "\n")
+}
+```
+
+## Nilai VIF
+
+```{r}
+vif(model1)
+```
+
+Hasil pemeriksaan dengan akar ciri menyatakan tidak ada multikolinearitas pada model karena rasio akar ciri terbesar terhadap terkecil tidak melebihi 100. Nilai VIF juga menunjukkan tidak ada peubah dengan VIF lebih dari 10, bahkan seluruhnya berada di bawah 5. Dengan demikian, secara keseluruhan tidak ditemukan indikasi multikolinearitas yang serius pada model ini. Meski demikian, karena peubah `bedrooms` dan `land_size_m2` tidak signifikan secara individu, penanganan tetap dilakukan dengan mengeluarkan kedua peubah tersebut dari model agar model menjadi lebih sederhana (parsimoni) tanpa kehilangan informasi penting.
+
+# Pemodelan Penyisihan Peubah
+
+```{r}
+model2 <- lm(log_price ~ bathrooms + building_size_m2 + building_age, data = dt)
+summary(model2)
+```
+
+Persamaan yang terbentuk adalah
+
+$$\widehat{\text{log\_price}} = 19.81 + 0.3413\,\text{bathrooms} + 0.0030\,\text{building\_size\_m2} + 0.0208\,\text{building\_age}$$
+
+Pada ringkasan model ini dapat dilihat bahwa secara simultan model signifikan, dan kini seluruh peubah penjelas juga signifikan secara individu pada taraf nyata 5%. Tidak ada perubahan tanda koefisien yang berlawanan dengan arah korelasi pada model ini.
+
+## Nilai VIF
+
+```{r}
+vif(model2)
+```
+
+Model hasil reduksi peubah menunjukkan bahwa nilai VIF seluruh peubah jauh di bawah 10, bahkan di bawah 3, sehingga dinyatakan tidak terjadi multikolinearitas. Walaupun model ini secara koefisien sudah baik, perlu dilakukan uji asumsi sisaan serta pemeriksaan pencilan, leverage, dan amatan berpengaruh untuk memastikan model benar-benar layak digunakan.
+
+# Pengujian Asumsi
+
+## Eksplorasi Grafik
+
+### Plot Sisaan vs Y Duga
+
+```{r}
+plot(model2, 1)
+```
+
+1. Sisaan tersebar di sekitar 0, namun kepadatan titik jauh lebih tinggi di sisi kiri (nilai dugaan rendah) dibandingkan sisi kanan.\
+2. Lebar pita sisaan tidak konsisten untuk setiap nilai dugaan, mengindikasikan ragam sisaan tidak homogen.\
+3. Tampak pola melebar (corong) pada sisi kanan plot, memperkuat indikasi ragam sisaan tidak homogen.\
+
+### Plot Sisaan vs Urutan
+
+```{r}
+plot(x = 1:dim(dt)[1],
+     y = model2$residuals,
+     type = 'p',
+     ylab = "Residuals",
+     xlab = "Observation")
+```
+
+Karena data ini bersifat cross-sectional (bukan deret waktu) dan urutan baris pada data tidak memiliki makna kronologis, plot sisaan terhadap urutan amatan di sini hanya digunakan sebagai pelengkap visual. Sebaran tampak relatif acak tanpa tren naik/turun yang jelas terhadap urutan baris, namun kesimpulan independensi sisaan yang lebih valid untuk data cross-sectional tetap diperoleh dari uji formal seperti Breusch-Pagan dan pemeriksaan struktur data, bukan dari uji Durbin-Watson yang aslinya dirancang untuk data deret waktu.
+
+### QQ Plot
+
+```{r}
+plot(model2, 2)
+```
+
+Pada bagian ekor kiri dan ekor kanan, banyak titik amatan menjauh dari garis acuan, sehingga sisaan terindikasi tidak menyebar normal.
+
+## Uji Formal
+
+### Nilai Harapan Sisaan Sama dengan Nol
+
+```{r}
+t.test(model2$residuals, mu = 0, conf.level = 0.95)
+```
+
+Nilai p pada uji t sama dengan 1 yang lebih besar dari alpha 5%, sehingga dinyatakan asumsi nilai harapan sisaan sama dengan nol terpenuhi. Hasil ini secara teoritis selalu terpenuhi pada model regresi linear dengan metode kuadrat terkecil, karena sisaan akan selalu memiliki rata-rata nol.
+
+### Ragam Sisaan Homogen
+
+```{r}
+bptest(model2)
+```
+
+Nilai p pada uji Breusch-Pagan jauh lebih kecil dari alpha 5%, sehingga dinyatakan asumsi ragam sisaan homogen **tidak terpenuhi**. Hal ini sejalan dengan pola corong yang terlihat pada plot sisaan vs nilai dugaan, mengindikasikan keragaman harga rumah yang semakin besar pada rumah-rumah dengan nilai dugaan harga yang lebih tinggi.
+
+### Sisaan Saling Bebas
+
+```{r}
+dwtest(model2)
+```
+
+Uji Durbin-Watson menunjukkan nilai p yang sangat kecil, namun perlu dicatat bahwa uji ini dirancang untuk mendeteksi autokorelasi pada data deret waktu berdasarkan urutan pengamatan. Karena data rumah Jabodetabek bersifat cross-sectional dan urutan barisnya tidak memiliki makna waktu, hasil uji Durbin-Watson di sini lebih mengindikasikan adanya pengelompokan/struktur tertentu pada urutan data (kemungkinan data dikumpulkan per wilayah atau per sumber) dibanding autokorelasi temporal yang sesungguhnya. Indikasi ini sebaiknya ditindaklanjuti dengan memeriksa struktur pengelompokan pada data asli, bukan diinterpretasikan sebagai pelanggaran asumsi independensi galat secara baku.
+
+### Normalitas Sisaan
+
+```{r}
+shapiro.test(model2$residuals)
+```
+
+Nilai p pada uji Shapiro-Wilk jauh lebih kecil dari alpha 5%, sehingga dinyatakan asumsi normalitas sisaan **tidak terpenuhi**.
+
+Asumsi ragam sisaan homogen dan normalitas sisaan tidak terpenuhi pada model ini, kemungkinan disebabkan oleh keberadaan amatan yang tidak biasa seperti pencilan, leverage, atau amatan berpengaruh, mengingat data harga rumah umumnya memiliki sebagian kecil properti dengan karakteristik sangat berbeda (misalnya rumah mewah dengan harga jauh di atas rata-rata).
+
+# Pemeriksaan Amatan Tidak Biasa
+
+```{r}
+# fungsi
+ri_stud <- rstudent(model2)
+ri_stan <- rstandard(model2)
+hii_fungsi <- hatvalues(model2)
+
+# manual
+X <- model.matrix(model2)
+X_inv_xt <- X %*% solve(t(X) %*% X) %*% t(X)
+hii_manual <- diag(X_inv_xt)
+anova_model <- anova(model2)
+s <- sqrt(anova_model["Residuals", "Mean Sq"])
+ei <- model2$residuals
+ri_manual <- ei / (s * sqrt(1 - hii_manual))
+
+nilai <- data.frame(ri_stud, ri_stan, ri_manual, hii_fungsi, hii_manual)
+head(nilai, 10)
+```
+
+Karena data berjumlah `r nrow(dt)` amatan, pemeriksaan amatan tidak biasa pada praktikum ini dirangkum secara agregat (jumlah dan proporsi amatan yang terdeteksi), bukan ditelusuri satu per satu seperti pada data berukuran kecil.
+
+## Pencilan
+
+```{r}
+absri <- abs(nilai$ri_stan)
+pencilan <- which(absri > 2)
+cat("Jumlah amatan terdeteksi sebagai pencilan:", length(pencilan), "dari", nrow(dt),
+    "amatan (", round(length(pencilan) / nrow(dt) * 100, 2), "%)\n")
+head(pencilan, 20)
+```
+
+Sekitar `r round(length(pencilan)/nrow(dt)*100,2)`% amatan terdeteksi sebagai pencilan berdasarkan kriteria $|r_i| > 2$. Proporsi ini relatif kecil namun tidak diabaikan, sejalan dengan dugaan bahwa terdapat sebagian rumah dengan karakteristik harga yang menyimpang dari pola umum.
+
+## Leverage
+
+```{r}
+n <- dim(dt)[1]
+p <- length(model2$coefficients)
+cutoff <- 2 * p / n
+
+titik_leverage <- which(hii_fungsi > cutoff)
+cat("Cutoff leverage (2p/n):", round(cutoff, 5), "\n")
+cat("Jumlah titik leverage:", length(titik_leverage), "dari", n,
+    "amatan (", round(length(titik_leverage) / n * 100, 2), "%)\n")
+head(titik_leverage, 20)
+```
+
+Sekitar `r round(length(titik_leverage)/nrow(dt)*100,2)`% amatan terdeteksi sebagai titik leverage, yaitu amatan dengan kombinasi nilai peubah penjelas yang relatif ekstrem dibandingkan amatan lainnya.
+
+```{r}
+ols_plot_resid_lev(model2)
+```
+
+Plot yang terbentuk dari fungsi `ols_plot_resid_lev()` menunjukkan sebaran amatan berdasarkan sisaan terstandardisasi dan leverage secara bersamaan, sehingga titik-titik yang berada di luar kedua ambang batas (baik secara vertikal maupun horizontal) dapat dengan cepat diidentifikasi sebagai pencilan, leverage, atau keduanya.
+
+## Amatan Berpengaruh
+
+### Jarak Cook
+
+```{r}
+di <- cooks.distance(model2)
+f <- qf(0.05, p, n - p, lower.tail = FALSE)
+cat("Cutoff Jarak Cook (berdasarkan distribusi F):", round(f, 4), "\n")
+cat("Jumlah amatan dengan Jarak Cook melebihi cutoff F:", sum(di > f), "\n")
+```
+
+```{r}
+cooks_crit <- f
+model_cooks <- di
+df <- data.frame(obs = as.numeric(names(model_cooks)),
+                  cooks = model_cooks)
+ggplot(df, aes(y = cooks, x = obs)) +
+  geom_point() +
+  geom_hline(yintercept = cooks_crit, linetype = "dashed") +
+  labs(title = "Cook's Distance",
+       subtitle = "Influential Observation",
+       x = "Observation Number",
+       y = "Cook's Distance")
+```
+
+Pemeriksaan amatan berpengaruh dengan jarak Cook menggunakan cutoff berdasarkan distribusi F tidak menghasilkan amatan yang melebihi ambang batas tersebut, karena cutoff ini cenderung sangat konservatif untuk ukuran data yang besar. Sebagai alternatif yang lebih umum digunakan pada data berukuran besar, dapat digunakan cutoff $4/n$.
+
+```{r}
+cutoff_cook_alt <- 4 / n
+melebihi_cook_alt <- which(di > cutoff_cook_alt)
+cat("Cutoff alternatif (4/n):", round(cutoff_cook_alt, 5), "\n")
+cat("Jumlah amatan dengan Jarak Cook melebihi cutoff 4/n:", length(melebihi_cook_alt),
+    "dari", n, "amatan (", round(length(melebihi_cook_alt) / n * 100, 2), "%)\n")
+```
+
+### DFBETAS
+
+```{r}
+ols_plot_dfbetas(model2)
+```
+
+Hasil DFBETAS menunjukkan pengaruh masing-masing observasi terhadap setiap koefisien regresi, sehingga terdapat satu plot untuk setiap parameter regresi. DFBETAS mengukur seberapa besar koefisien regresi berubah jika suatu observasi dihapus dari model. Pada plot ini, garis ambang batas membantu mengidentifikasi observasi-observasi yang pengaruhnya terhadap koefisien tertentu cukup besar.
+
+### DFFITS
+
+```{r}
+ols_plot_dffits(model2)
+```
+
+Hasil DFFITS menunjukkan pengaruh observasi terhadap nilai prediksi Y, sehingga hanya menghasilkan satu output. DFFITS mengukur seberapa besar nilai prediksi $\hat{Y}_i$ berubah jika suatu observasi dihapus dari model, sehingga lebih tepat digunakan untuk melihat pengaruh observasi terhadap hasil model secara keseluruhan.
+
+```{r}
+DFFITSi <- dffits(model2)
+cutoff_dffits <- 2 * sqrt(p / n)
+amatan_berpengaruh <- which(abs(DFFITSi) > cutoff_dffits)
+
+cat("Cutoff DFFITS:", round(cutoff_dffits, 4), "\n")
+cat("Jumlah amatan berpengaruh (DFFITS):", length(amatan_berpengaruh), "dari", n,
+    "amatan (", round(length(amatan_berpengaruh) / n * 100, 2), "%)\n")
+```
+
+Berdasarkan kriteria DFFITS, terdapat sejumlah amatan yang teridentifikasi cukup berpengaruh terhadap nilai prediksi model. Karena jumlahnya cukup banyak dan tidak mungkin ditelusuri satu per satu seperti pada data berukuran kecil, pada bagian berikutnya akan dibandingkan performa model ketika seluruh amatan tidak biasa (gabungan pencilan, leverage, dan amatan berpengaruh) disisihkan secara bersamaan.
+
+# Pemodelan Penyisihan Amatan
+
+```{r}
+# Gabungan amatan tidak biasa: pencilan, leverage, dan amatan berpengaruh (DFFITS)
+gabungan_tidak_biasa <- sort(unique(c(pencilan, titik_leverage, amatan_berpengaruh)))
+
+cat("Jumlah total amatan tidak biasa (gabungan, tanpa duplikasi):", length(gabungan_tidak_biasa),
+    "dari", n, "amatan (", round(length(gabungan_tidak_biasa) / n * 100, 2), "%)\n")
+```
+
+```{r}
+# Model setelah menyisihkan amatan tidak biasa
+dt_bersih <- dt[-gabungan_tidak_biasa, ]
+model3 <- lm(log_price ~ bathrooms + building_size_m2 + building_age, data = dt_bersih)
+summary(model3)
+```
+
+```{r}
+get_metrics <- function(model) {
+  adj_r2 <- summary(model)$adj.r.squared
+  sse <- sum(model$residuals^2)
+  return(c(adj_r2, sse))
+}
+
+model_metrics <- data.frame(
+  Model = c("Model Awal (Model 2)", "Model Penyisihan Amatan (Model 3)"),
+  Adjusted_R2 = sapply(list(model2, model3), function(m) get_metrics(m)[1]),
+  SSE = sapply(list(model2, model3), function(m) get_metrics(m)[2])
+)
+
+print(model_metrics)
+```
+
+Berdasarkan hasil perbandingan tersebut, model yang menyisihkan seluruh amatan tidak biasa (Model 3) memiliki nilai Adjusted R-squared yang jauh lebih besar dan SSE yang jauh lebih kecil dibandingkan model awal (Model 2). Hal ini menunjukkan bahwa keberadaan amatan-amatan tidak biasa tersebut, meskipun secara proporsi relatif kecil terhadap keseluruhan data, memberikan kontribusi besar terhadap keragaman sisaan yang tidak dapat dijelaskan oleh model.
+
+```{r}
+stargazer(model2, model3, type = "text", font.size = "small",
+          report = "vc*p")
+```
+
+```{r}
+cat("--- Cek ulang asumsi pada model setelah penyisihan amatan ---\n")
+bptest(model3)
+```
+
+```{r}
+shapiro.test(model3$residuals)
+```
+
+Setelah penyisihan amatan tidak biasa, nilai p pada uji Breusch-Pagan dan Shapiro-Wilk membaik dibandingkan model awal, meskipun keduanya masih berada di bawah taraf nyata 5% sehingga asumsi ragam sisaan homogen dan normalitas sisaan belum sepenuhnya terpenuhi. Hal ini mengindikasikan bahwa selain amatan tidak biasa, kemungkinan masih diperlukan penanganan lain seperti transformasi tambahan pada peubah penjelas atau penggunaan model yang lebih fleksibel (misalnya regresi non-linear atau pembobotan) untuk memodelkan harga rumah secara lebih baik.
